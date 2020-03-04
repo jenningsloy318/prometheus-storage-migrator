@@ -3,12 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
-
 	"os"
 	"path/filepath"
 
 	"github.com/go-kit/kit/log"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/prometheus/pkg/labels"
 	"github.com/prometheus/prometheus/storage"
 	"github.com/prometheus/prometheus/tsdb"
@@ -37,26 +35,29 @@ func main() {
 	}
 	//create tsdb connection
 	var logger log.Logger
-	tsdbOpts := &tsdb.Options{}
 
-	tsdbConn, err := tsdb.Open(cfg.ReadStoragePath, logger, prometheus.DefaultRegisterer, tsdbOpts)
-	defer tsdbConn.Close()
+	tsdbConn, err := tsdb.OpenDBReadOnly(cfg.ReadStoragePath, logger)
 	if err != nil {
 		fmt.Printf("Error when open tsdb connection in readonly mode, %s.\n", err)
 		os.Exit(2)
 	}
-
+	ctx := context.Background()
 	// retrieve the blocks
-	for _, block := range tsdbConn.Blocks() {
-		defer block.Close()
-		blockMinT := block.MinTime()
-		blockMaxT := block.MaxTime()
+	blockReaders, err := tsdbConn.Blocks()
+	if err != nil {
+		fmt.Printf("Error when getting blocks from tsdb connection, %s.\n", err)
+
+	}
+
+	for _, blockReader := range blockReaders {
+		blockMeta := blockReader.Meta()
+		blockMinT := blockMeta.MinTime
+		blockMaxT := blockMeta.MaxTime
 
 		// get storage querier from block
-		ctx := context.Background()
 		storageQuerier, err := tsdbConn.Querier(ctx, blockMinT, blockMaxT)
 		if err != nil {
-			fmt.Printf("Error when creating storage querier from block %s, %s.\n", block, err)
+			fmt.Printf("Error when creating storage querier from block %s, %s.\n", blockReader, err)
 
 		}
 		// Get seriesSet from storageQuerier
@@ -87,10 +88,6 @@ func main() {
 				timeStamp, seriesValue := chunkIterator.At()
 				fmt.Printf("{metric: %s,values: [[%d,%f]]}\n", labels, timeStamp, seriesValue)
 			}
-			if !timeSeriesSet.Next() { // last loop, the value become flase, but for loop will not exit, so manually exit
-				os.Exit(0)
-			}
 		}
-
 	}
 }
