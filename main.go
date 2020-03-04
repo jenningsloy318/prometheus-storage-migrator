@@ -8,9 +8,9 @@ import (
 
 	"github.com/go-kit/kit/log"
 	"github.com/prometheus/prometheus/pkg/labels"
+	"github.com/prometheus/prometheus/prompb"
 	"github.com/prometheus/prometheus/storage"
 	"github.com/prometheus/prometheus/tsdb"
-
 	kingpin "gopkg.in/alecthomas/kingpin.v2"
 )
 
@@ -55,7 +55,7 @@ func main() {
 		blockMaxT := blockMeta.MaxTime
 
 		// get storage querier from block
-		storageQuerier, err := tsdbConn.Querier(ctx, blockMinT, blockMaxT)
+		storageQuerier, err := tsdbConn.Querier(ctx, blockMinT, blockMinT+1)
 		if err != nil {
 			fmt.Printf("Error when creating storage querier from block %s, %s.\n", blockReader, err)
 
@@ -83,11 +83,29 @@ func main() {
 		for timeSeriesSet.Next() {
 			series := timeSeriesSet.At()
 			labels := series.Labels()
+			var tsLables []prompb.Label
+
+			for _, label := range labels {
+				tsLables = append(tsLables, prompb.Label{
+					Name:  label.Name,
+					Value: label.Value,
+				})
+			}
+
+			var tsSamples []prompb.Sample
 			chunkIterator := series.Iterator()
 			for chunkIterator.Next() {
-				timeStamp, seriesValue := chunkIterator.At()
-				fmt.Printf("{metric: %s,values: [[%d,%f]]}\n", labels, timeStamp, seriesValue)
+				timeStamp, tsValue := chunkIterator.At()
+				tsSamples = append(tsSamples, prompb.Sample{
+					Timestamp: timeStamp,
+					Value:     tsValue,
+				})
 			}
+
+			var ts []prompb.TimeSeries
+			ts = append(ts, prompb.TimeSeries{Labels: tsLables, Samples: tsSamples})
+
 		}
+
 	}
 }
