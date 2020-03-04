@@ -1,15 +1,20 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
-
 	"github.com/go-kit/kit/log"
+	"github.com/golang/protobuf/proto"
+	"github.com/golang/snappy"
 	"github.com/prometheus/prometheus/pkg/labels"
 	"github.com/prometheus/prometheus/prompb"
 	"github.com/prometheus/prometheus/storage"
+	"github.com/prometheus/prometheus/storage/remote"
+	"os"
+	"path/filepath"
+	"time"
+
 	"github.com/prometheus/prometheus/tsdb"
 	kingpin "gopkg.in/alecthomas/kingpin.v2"
 )
@@ -104,7 +109,29 @@ func main() {
 
 			var ts []prompb.TimeSeries
 			ts = append(ts, prompb.TimeSeries{Labels: tsLables, Samples: tsSamples})
+			tsWriteRequest := &prompb.WriteRequest{
+				Timeseries: ts,
+			}
+			tsWriteRequestData, err := proto.Marshal(tsWriteRequest)
+			if err != nil {
+				fmt.Errorf("unable to marshal protobuf: %v", err)
+			}
 
+			encodedTsWriteRequestData := snappy.Encode(nil, tsWriteRequestData)
+
+			requestBody := bytes.NewReader(encodedTsWriteRequestData)
+			clientConfig := &remote.ClientConfig{
+				URL:     &cfg.WriteRemoteURL,
+				Timeout: 10 * time.Second,
+			}
+
+			// NewClient creates a new Client.
+			client, err := remote.NewClient("remote", clientConfig)
+			if err != nil {
+				fmt.Printf("Error when create remote client,%s", err)
+			}
+
+			fmt.Println(client)
 		}
 
 	}
