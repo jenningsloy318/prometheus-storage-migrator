@@ -1,0 +1,16 @@
+# Handle line endings automatically for files detected as text
+# and leave all files detected as binary untouched.
+*               text eol=lf
+
+# These files are text and should be normalized (Convert crlf => lf)
+*.gitattributes text
+.gitignore      text
+*.md            text
+*.sh            text 
+*.go            text
+
+
+
+
+.gitattributes  export-ignore
+.gitignore      export-ignore
