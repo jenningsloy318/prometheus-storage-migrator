@@ -1,22 +1,24 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"github.com/go-kit/kit/log"
 	"github.com/golang/protobuf/proto"
 	"github.com/golang/snappy"
+	"github.com/prometheus/common/config"
+	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/pkg/labels"
 	"github.com/prometheus/prometheus/prompb"
 	"github.com/prometheus/prometheus/storage"
 	"github.com/prometheus/prometheus/storage/remote"
+	"github.com/prometheus/prometheus/tsdb"
+	kingpin "gopkg.in/alecthomas/kingpin.v2"
+
+	"net/url"
 	"os"
 	"path/filepath"
 	"time"
-
-	"github.com/prometheus/prometheus/tsdb"
-	kingpin "gopkg.in/alecthomas/kingpin.v2"
 )
 
 func main() {
@@ -108,6 +110,7 @@ func main() {
 			}
 
 			var ts []prompb.TimeSeries
+
 			ts = append(ts, prompb.TimeSeries{Labels: tsLables, Samples: tsSamples})
 			tsWriteRequest := &prompb.WriteRequest{
 				Timeseries: ts,
@@ -116,22 +119,38 @@ func main() {
 			if err != nil {
 				fmt.Errorf("unable to marshal protobuf: %v", err)
 			}
+			var buf []byte
+			if buf != nil {
+				buf = buf[0:cap(buf)]
+			}
+			TsWriteRequestBody := snappy.Encode(buf, tsWriteRequestData)
 
-			encodedTsWriteRequestData := snappy.Encode(nil, tsWriteRequestData)
+			newURL, err := url.Parse(cfg.WriteRemoteURL)
+			if err != nil {
+				fmt.Printf("Error when create remote client,%s", err)
+			}
 
-			requestBody := bytes.NewReader(encodedTsWriteRequestData)
+			requestURL := &config.URL{newURL}
 			clientConfig := &remote.ClientConfig{
-				URL:     &cfg.WriteRemoteURL,
-				Timeout: 10 * time.Second,
+				URL:     requestURL,
+				Timeout: model.Duration(2 * time.Second),
 			}
 
 			// NewClient creates a new Client.
+
 			client, err := remote.NewClient("remote", clientConfig)
 			if err != nil {
 				fmt.Printf("Error when create remote client,%s", err)
 			}
 
-			fmt.Println(client)
+			errs := client.Store(ctx, TsWriteRequestBody)
+			time.Sleep(3 * time.Second)
+
+			if errs != nil {
+				fmt.Printf("Error when storing metrics to remote writer,%s\n", err)
+				break
+			}
+			fmt.Printf("stored pmetric %#v\n", tsWriteRequestData)
 		}
 
 	}
