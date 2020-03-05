@@ -111,7 +111,10 @@ func main() {
 
 			var ts []prompb.TimeSeries
 
-			ts = append(ts, prompb.TimeSeries{Labels: tsLables, Samples: tsSamples})
+			ts = append(ts, prompb.TimeSeries{
+				Labels:  tsLables,
+				Samples: tsSamples})
+
 			tsWriteRequest := &prompb.WriteRequest{
 				Timeseries: ts,
 			}
