@@ -1,24 +1,26 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/tls"
 	"fmt"
+	"io/ioutil"
+	"net/http"
+	"time"
+
 	"github.com/go-kit/kit/log"
 	"github.com/golang/protobuf/proto"
 	"github.com/golang/snappy"
-	"github.com/prometheus/common/config"
-	"github.com/prometheus/common/model"
+	"github.com/pkg/errors"
 	"github.com/prometheus/prometheus/pkg/labels"
 	"github.com/prometheus/prometheus/prompb"
 	"github.com/prometheus/prometheus/storage"
-	"github.com/prometheus/prometheus/storage/remote"
 	"github.com/prometheus/prometheus/tsdb"
 	kingpin "gopkg.in/alecthomas/kingpin.v2"
 
-	"net/url"
 	"os"
 	"path/filepath"
-	"time"
 )
 
 func main() {
@@ -114,47 +116,67 @@ func main() {
 			ts = append(ts, prompb.TimeSeries{
 				Labels:  tsLables,
 				Samples: tsSamples})
-
-			tsWriteRequest := &prompb.WriteRequest{
-				Timeseries: ts,
-			}
-			tsWriteRequestData, err := proto.Marshal(tsWriteRequest)
+			err := storeMetrics(cfg.WriteRemoteURL, ts)
 			if err != nil {
-				fmt.Errorf("unable to marshal protobuf: %v", err)
+				fmt.Println(err)
 			}
-			var buf []byte
-			if buf != nil {
-				buf = buf[0:cap(buf)]
-			}
-			TsWriteRequestBody := snappy.Encode(buf, tsWriteRequestData)
-
-			newURL, err := url.Parse(cfg.WriteRemoteURL)
-			if err != nil {
-				fmt.Printf("Error when create remote client,%s", err)
-			}
-
-			requestURL := &config.URL{newURL}
-			clientConfig := &remote.ClientConfig{
-				URL:     requestURL,
-				Timeout: model.Duration(2 * time.Second),
-			}
-
-			// NewClient creates a new Client.
-
-			client, err := remote.NewClient("remote", clientConfig)
-			if err != nil {
-				fmt.Printf("Error when create remote client,%s", err)
-			}
-
-			errs := client.Store(ctx, TsWriteRequestBody)
-			time.Sleep(3 * time.Second)
-
-			if errs != nil {
-				fmt.Printf("Error when storing metrics to remote writer,%s\n", err)
-				break
-			}
-			fmt.Printf("stored pmetric %#v\n", tsWriteRequestData)
 		}
 
 	}
+}
+
+func storeMetrics(url string, ts []prompb.TimeSeries) error {
+	//var userAgent = fmt.Sprintf("Prometheus/%s", version.Version)
+	fmt.Printf("saving metrics %+v\n", ts)
+	tsRequest := &prompb.WriteRequest{
+		Timeseries: ts,
+	}
+	tsRequestData, err := proto.Marshal(tsRequest)
+	if err != nil {
+		fmt.Errorf("unable to marshal protobuf: %v", err)
+	}
+	tsRequestBody := snappy.Encode(nil, tsRequestData)
+	httpRequest, err := http.NewRequest("POST", url, bytes.NewReader(tsRequestBody))
+
+	if err != nil {
+		return err
+	}
+	httpRequest.Header.Set("Content-Type", "application/x-protobuf")
+	//httpRequest.Header.Set("User-Agent", userAgent)
+
+	client := &http.Client{
+		Timeout: 20 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true,
+			},
+		},
+	}
+	ctx := context.Background()
+	defer ctx.Done()
+
+	fmt.Printf("http request %+v\n", httpRequest)
+	httpResponse, err := client.Do(httpRequest.WithContext(ctx))
+
+	if err != nil {
+		fmt.Println(err)
+		return err
+	}
+	defer httpResponse.Body.Close()
+	compressedBody, err := ioutil.ReadAll(httpResponse.Body)
+	if err != nil {
+		fmt.Printf("err %s\n", err)
+	}
+
+	uncompressedBody, err := snappy.Decode(nil, compressedBody)
+
+	var prompbResp prompb.ReadResponse
+	err = proto.Unmarshal(uncompressedBody, &prompbResp)
+	if err != nil {
+		return errors.Wrap(err, "unable to unmarshal response body")
+	}
+
+	fmt.Printf("Http response body %+v\n", prompbResp)
+	return nil
+
 }
