@@ -12,11 +12,11 @@ import (
 	"github.com/go-kit/kit/log"
 	"github.com/golang/protobuf/proto"
 	"github.com/golang/snappy"
-	"github.com/pkg/errors"
 	"github.com/prometheus/prometheus/pkg/labels"
 	"github.com/prometheus/prometheus/prompb"
 	"github.com/prometheus/prometheus/storage"
 	"github.com/prometheus/prometheus/tsdb"
+	"go.etcd.io/etcd/version"
 	kingpin "gopkg.in/alecthomas/kingpin.v2"
 
 	"os"
@@ -39,7 +39,7 @@ func main() {
 	_, err := Opts.Parse(os.Args[1:])
 
 	if err != nil {
-		fmt.Printf("Error parsing commandline arguments, %s.\n", err)
+		fmt.Errorf("Error parsing commandline arguments, %s.\n", err)
 		os.Exit(2)
 	}
 	//create tsdb connection
@@ -47,14 +47,14 @@ func main() {
 
 	tsdbConn, err := tsdb.OpenDBReadOnly(cfg.ReadStoragePath, logger)
 	if err != nil {
-		fmt.Printf("Error when open tsdb connection in readonly mode, %s.\n", err)
+		fmt.Errorf("Error when open tsdb connection in readonly mode, %s.\n", err)
 		os.Exit(2)
 	}
 	ctx := context.Background()
 	// retrieve the blocks
 	blockReaders, err := tsdbConn.Blocks()
 	if err != nil {
-		fmt.Printf("Error when getting blocks from tsdb connection, %s.\n", err)
+		fmt.Errorf("Error when getting blocks from tsdb connection, %s.\n", err)
 
 	}
 
@@ -66,7 +66,7 @@ func main() {
 		// get storage querier from block
 		storageQuerier, err := tsdbConn.Querier(ctx, blockMinT, blockMinT+1)
 		if err != nil {
-			fmt.Printf("Error when creating storage querier from block %s, %s.\n", blockReader, err)
+			fmt.Errorf("Error when creating storage querier from block %s, %s.\n", blockReader, err)
 
 		}
 		// Get seriesSet from storageQuerier
@@ -77,16 +77,16 @@ func main() {
 		labelMatcher, err := labels.NewMatcher(labels.MatchRegexp, "__name__", ".+")
 
 		if err != nil {
-			fmt.Printf("warnings when creating label Matcher %s\n", err)
+			fmt.Errorf("warnings when creating label Matcher %s\n", err)
 		}
 
 		timeSeriesSet, warnings, err := storageQuerier.Select(labelSelectParams, labelMatcher)
 
 		if warnings != nil {
-			fmt.Printf("warnings when getting time series set from storage querier ,%s", warnings)
+			fmt.Errorf("warnings when getting time series set from storage querier ,%s", warnings)
 		}
 		if err != nil {
-			fmt.Printf("Errors when getting time series set from storage querier,%s", err)
+			fmt.Errorf("Errors when getting time series set from storage querier,%s", err)
 		}
 		// get timeseries data from timeSeriesSet
 		for timeSeriesSet.Next() {
@@ -127,8 +127,7 @@ func main() {
 }
 
 func storeMetrics(url string, ts []prompb.TimeSeries) error {
-	//var userAgent = fmt.Sprintf("Prometheus/%s", version.Version)
-	fmt.Printf("saving metrics %+v\n", ts)
+	var userAgent = fmt.Sprintf("Prometheus/%s", version.Version)
 	tsRequest := &prompb.WriteRequest{
 		Timeseries: ts,
 	}
@@ -137,13 +136,17 @@ func storeMetrics(url string, ts []prompb.TimeSeries) error {
 		fmt.Errorf("unable to marshal protobuf: %v", err)
 	}
 	tsRequestBody := snappy.Encode(nil, tsRequestData)
-	httpRequest, err := http.NewRequest("POST", url, bytes.NewReader(tsRequestBody))
+	body := bytes.NewReader(tsRequestBody)
+	httpRequest, err := http.NewRequest("POST", url, body)
 
 	if err != nil {
 		return err
 	}
+
 	httpRequest.Header.Set("Content-Type", "application/x-protobuf")
-	//httpRequest.Header.Set("User-Agent", userAgent)
+	httpRequest.Header.Set("Content-Encoding", "snappy")
+	httpRequest.Header.Set("X-Prometheus-Remote-Write-Version", "0.1.0")
+	httpRequest.Header.Set("User-Agent", userAgent)
 
 	client := &http.Client{
 		Timeout: 20 * time.Second,
@@ -156,28 +159,33 @@ func storeMetrics(url string, ts []prompb.TimeSeries) error {
 	ctx := context.Background()
 	defer ctx.Done()
 
-	fmt.Printf("http request %+v\n", httpRequest)
 	httpResponse, err := client.Do(httpRequest.WithContext(ctx))
 
 	if err != nil {
 		fmt.Println(err)
 		return err
 	}
-	defer httpResponse.Body.Close()
-	compressedBody, err := ioutil.ReadAll(httpResponse.Body)
-	if err != nil {
-		fmt.Printf("err %s\n", err)
+
+	statusCode := httpResponse.StatusCode
+	if statusCode/100 != 2 {
+		fmt.Errorf("expected HTTP 200 status code: actual=%d", statusCode)
 	}
 
-	uncompressedBody, err := snappy.Decode(nil, compressedBody)
+	rawResponseBody, err := ioutil.ReadAll(httpResponse.Body)
+	if err != nil {
+		fmt.Errorf("Error when getting the response body from http response %s", err)
+	}
+
+	defer httpResponse.Body.Close()
+
+	ResponseBody, err := snappy.Decode(nil, rawResponseBody)
 
 	var prompbResp prompb.ReadResponse
-	err = proto.Unmarshal(uncompressedBody, &prompbResp)
+	err = proto.Unmarshal(ResponseBody, &prompbResp)
 	if err != nil {
-		return errors.Wrap(err, "unable to unmarshal response body")
+		return fmt.Errorf("unable to unmarshal response body, %s", err)
 	}
 
-	fmt.Printf("Http response body %+v\n", prompbResp)
 	return nil
 
 }
