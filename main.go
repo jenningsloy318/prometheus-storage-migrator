@@ -39,7 +39,7 @@ func main() {
 	_, err := Opts.Parse(os.Args[1:])
 
 	if err != nil {
-		fmt.Errorf("Error parsing commandline arguments, %s.\n", err)
+		fmt.Errorf("Error parsing commandline arguments, %s", err)
 		os.Exit(2)
 	}
 	//create tsdb connection
@@ -47,14 +47,14 @@ func main() {
 
 	tsdbConn, err := tsdb.OpenDBReadOnly(cfg.ReadStoragePath, logger)
 	if err != nil {
-		fmt.Errorf("Error when open tsdb connection in readonly mode, %s.\n", err)
+		fmt.Errorf("Error when open tsdb connection in readonly mode %s", err)
 		os.Exit(2)
 	}
 	ctx := context.Background()
 	// retrieve the blocks
 	blockReaders, err := tsdbConn.Blocks()
 	if err != nil {
-		fmt.Errorf("Error when getting blocks from tsdb connection, %s.\n", err)
+		fmt.Errorf("Error when getting blocks from tsdb connection, %s", err)
 
 	}
 
@@ -66,7 +66,7 @@ func main() {
 		// get storage querier from block
 		storageQuerier, err := tsdbConn.Querier(ctx, blockMinT, blockMinT+1)
 		if err != nil {
-			fmt.Errorf("Error when creating storage querier from block %s, %s.\n", blockReader, err)
+			fmt.Errorf("Error when creating storage querier from block %s, %s", blockReader, err)
 
 		}
 		// Get seriesSet from storageQuerier
@@ -77,7 +77,7 @@ func main() {
 		labelMatcher, err := labels.NewMatcher(labels.MatchRegexp, "__name__", ".+")
 
 		if err != nil {
-			fmt.Errorf("warnings when creating label Matcher %s\n", err)
+			fmt.Errorf("warnings when creating label Matcher %s", err)
 		}
 
 		timeSeriesSet, warnings, err := storageQuerier.Select(labelSelectParams, labelMatcher)
