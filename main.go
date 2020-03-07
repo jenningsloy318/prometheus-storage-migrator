@@ -101,25 +101,26 @@ func main() {
 				})
 			}
 
-			var tsSamples []prompb.Sample
 			chunkIterator := series.Iterator()
 			for chunkIterator.Next() {
+				var tsSamples []prompb.Sample
 				timeStamp, tsValue := chunkIterator.At()
 				tsSamples = append(tsSamples, prompb.Sample{
 					Timestamp: timeStamp,
 					Value:     tsValue,
 				})
+
+				var ts []prompb.TimeSeries
+
+				ts = append(ts, prompb.TimeSeries{
+					Labels:  tsLables,
+					Samples: tsSamples})
+				err := storeMetrics(cfg.WriteRemoteURL, ts)
+				if err != nil {
+					fmt.Println(err)
+				}
 			}
 
-			var ts []prompb.TimeSeries
-
-			ts = append(ts, prompb.TimeSeries{
-				Labels:  tsLables,
-				Samples: tsSamples})
-			err := storeMetrics(cfg.WriteRemoteURL, ts)
-			if err != nil {
-				fmt.Println(err)
-			}
 		}
 
 	}
