@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"fmt"
 	"io/ioutil"
 	"net/http"
@@ -16,7 +15,6 @@ import (
 	"github.com/prometheus/prometheus/prompb"
 	"github.com/prometheus/prometheus/storage"
 	"github.com/prometheus/prometheus/tsdb"
-	"go.etcd.io/etcd/version"
 	kingpin "gopkg.in/alecthomas/kingpin.v2"
 
 	"os"
@@ -24,7 +22,6 @@ import (
 )
 
 func main() {
-
 	//compose the cfg
 	cfg := struct {
 		ReadStoragePath string
@@ -93,6 +90,7 @@ func main() {
 			series := timeSeriesSet.At()
 			labels := series.Labels()
 			var tsLables []prompb.Label
+			var ts []prompb.TimeSeries
 
 			for _, label := range labels {
 				tsLables = append(tsLables, prompb.Label{
@@ -100,7 +98,6 @@ func main() {
 					Value: label.Value,
 				})
 			}
-
 			chunkIterator := series.Iterator()
 			for chunkIterator.Next() {
 				var tsSamples []prompb.Sample
@@ -110,31 +107,32 @@ func main() {
 					Value:     tsValue,
 				})
 
-				var ts []prompb.TimeSeries
-
 				ts = append(ts, prompb.TimeSeries{
 					Labels:  tsLables,
 					Samples: tsSamples})
-				err := storeMetrics(cfg.WriteRemoteURL, ts)
-				if err != nil {
-					fmt.Println(err)
-				}
+
 			}
-
+			err := storeMetrics(cfg.WriteRemoteURL, ts)
+			if err != nil {
+				fmt.Println(err)
+			}
 		}
-
 	}
+
 }
 
 func storeMetrics(url string, ts []prompb.TimeSeries) error {
-	var userAgent = fmt.Sprintf("Prometheus/%s", version.Version)
+
 	tsRequest := &prompb.WriteRequest{
 		Timeseries: ts,
 	}
+
+	//fmt.Printf("new request: %#v\n", *tsRequest)
 	tsRequestData, err := proto.Marshal(tsRequest)
 	if err != nil {
 		fmt.Errorf("unable to marshal protobuf: %v", err)
 	}
+
 	tsRequestBody := snappy.Encode(nil, tsRequestData)
 	body := bytes.NewReader(tsRequestBody)
 	httpRequest, err := http.NewRequest("POST", url, body)
@@ -143,18 +141,13 @@ func storeMetrics(url string, ts []prompb.TimeSeries) error {
 		return err
 	}
 
-	httpRequest.Header.Set("Content-Type", "application/x-protobuf")
+	httpRequest.Header.Set("User-Agent", "Prometheus/2.15.1")
 	httpRequest.Header.Set("Content-Encoding", "snappy")
+	httpRequest.Header.Set("Content-Type", "application/x-protobuf")
 	httpRequest.Header.Set("X-Prometheus-Remote-Write-Version", "0.1.0")
-	httpRequest.Header.Set("User-Agent", userAgent)
 
 	client := &http.Client{
 		Timeout: 20 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true,
-			},
-		},
 	}
 	ctx := context.Background()
 	defer ctx.Done()
