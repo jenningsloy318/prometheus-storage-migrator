@@ -61,7 +61,7 @@ func main() {
 		blockMaxT := blockMeta.MaxTime
 
 		// get storage querier from block
-		storageQuerier, err := tsdbConn.Querier(ctx, blockMinT, blockMinT+1)
+		storageQuerier, err := tsdbConn.Querier(ctx, blockMinT, blockMaxT)
 		if err != nil {
 			fmt.Errorf("Error when creating storage querier from block %s, %s", blockReader, err)
 
@@ -71,7 +71,7 @@ func main() {
 			Start: blockMinT,
 			End:   blockMaxT,
 		}
-		labelMatcher, err := labels.NewMatcher(labels.MatchRegexp, "__name__", ".+")
+		labelMatcher, err := labels.NewMatcher(labels.MatchRegexp, "instance", ".+")
 
 		if err != nil {
 			fmt.Errorf("warnings when creating label Matcher %s", err)
@@ -90,7 +90,6 @@ func main() {
 			series := timeSeriesSet.At()
 			labels := series.Labels()
 			var tsLables []prompb.Label
-			var ts []prompb.TimeSeries
 
 			for _, label := range labels {
 				tsLables = append(tsLables, prompb.Label{
@@ -106,15 +105,15 @@ func main() {
 					Timestamp: timeStamp,
 					Value:     tsValue,
 				})
-
+				var ts []prompb.TimeSeries
 				ts = append(ts, prompb.TimeSeries{
 					Labels:  tsLables,
 					Samples: tsSamples})
+				err := storeMetrics(cfg.WriteRemoteURL, ts)
+				if err != nil {
+					fmt.Errorf("Error when storing metrics to remote write endpoint,%s", err)
+				}
 
-			}
-			err := storeMetrics(cfg.WriteRemoteURL, ts)
-			if err != nil {
-				fmt.Println(err)
 			}
 		}
 	}
@@ -127,7 +126,7 @@ func storeMetrics(url string, ts []prompb.TimeSeries) error {
 		Timeseries: ts,
 	}
 
-	//fmt.Printf("new request: %#v\n", *tsRequest)
+	fmt.Printf("Saving the metrics to remote: %#v\n\n\n", *tsRequest)
 	tsRequestData, err := proto.Marshal(tsRequest)
 	if err != nil {
 		fmt.Errorf("unable to marshal protobuf: %v", err)
