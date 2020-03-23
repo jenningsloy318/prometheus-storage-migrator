@@ -8,17 +8,18 @@ import (
 	"net/http"
 	"time"
 
+	"os"
+	"path/filepath"
+
 	"github.com/go-kit/kit/log"
 	"github.com/golang/protobuf/proto"
 	"github.com/golang/snappy"
+	"github.com/m3db/prometheus_remote_client_golang/promremote"
 	"github.com/prometheus/prometheus/pkg/labels"
 	"github.com/prometheus/prometheus/prompb"
 	"github.com/prometheus/prometheus/storage"
 	"github.com/prometheus/prometheus/tsdb"
 	kingpin "gopkg.in/alecthomas/kingpin.v2"
-
-	"os"
-	"path/filepath"
 )
 
 func main() {
@@ -89,29 +90,27 @@ func main() {
 		for timeSeriesSet.Next() {
 			series := timeSeriesSet.At()
 			labels := series.Labels()
-			var tsLables []prompb.Label
-
+			var m3TsLabels []promremote.Label
 			for _, label := range labels {
-				tsLables = append(tsLables, prompb.Label{
+				m3TsLabels = append(m3TsLabels, promremote.Label{
 					Name:  label.Name,
 					Value: label.Value,
 				})
 			}
 			chunkIterator := series.Iterator()
 			for chunkIterator.Next() {
-				var tsSamples []prompb.Sample
+				var m3TimeSeries []promremote.TimeSeries
 				timeStamp, tsValue := chunkIterator.At()
-				tsSamples = append(tsSamples, prompb.Sample{
-					Timestamp: timeStamp,
-					Value:     tsValue,
+				m3TimeSeries = append(m3TimeSeries, promremote.TimeSeries{
+					Labels: m3TsLabels,
+					Datapoint: promremote.Datapoint{
+						Timestamp: time.Unix(timeStamp, 0),
+						Value:     tsValue},
 				})
-				var ts []prompb.TimeSeries
-				ts = append(ts, prompb.TimeSeries{
-					Labels:  tsLables,
-					Samples: tsSamples})
-				err := storeMetrics(cfg.WriteRemoteURL, ts)
+				err := storeToM3db(cfg.WriteRemoteURL, m3TimeSeries)
 				if err != nil {
-					fmt.Errorf("Error when storing metrics to remote write endpoint,%s", err)
+					fmt.Errorf("Errors when store metrics to m3db ,%s", err)
+
 				}
 
 			}
@@ -120,64 +119,29 @@ func main() {
 
 }
 
-func storeMetrics(url string, ts []prompb.TimeSeries) error {
-
-	tsRequest := &prompb.WriteRequest{
-		Timeseries: ts,
-	}
-
-	fmt.Printf("Saving the metrics to remote: %#v\n\n\n", *tsRequest)
-	tsRequestData, err := proto.Marshal(tsRequest)
-	if err != nil {
-		fmt.Errorf("unable to marshal protobuf: %v", err)
-	}
-
-	tsRequestBody := snappy.Encode(nil, tsRequestData)
-	body := bytes.NewReader(tsRequestBody)
-	httpRequest, err := http.NewRequest("POST", url, body)
-
-	if err != nil {
-		return err
-	}
-
-	httpRequest.Header.Set("User-Agent", "Prometheus/2.15.1")
-	httpRequest.Header.Set("Content-Encoding", "snappy")
-	httpRequest.Header.Set("Content-Type", "application/x-protobuf")
-	httpRequest.Header.Set("X-Prometheus-Remote-Write-Version", "0.1.0")
-
-	client := &http.Client{
-		Timeout: 20 * time.Second,
-	}
+func storeToM3db(url string, ts []promremote.TimeSeries) error {
+	cfg := promremote.NewConfig(
+		promremote.WriteURLOption(url),
+		promremote.HTTPClientTimeoutOption(60*time.Second),
+		promremote.UserAgent("Prometheus/2.15.1"),
+	)
 	ctx := context.Background()
 	defer ctx.Done()
 
-	httpResponse, err := client.Do(httpRequest.WithContext(ctx))
-
+	fmt.Printf("Store metric %#v\n", ts)
+	var wrOpts = promremote.WriteOptions{}
+	client, err := promremote.NewClient(cfg)
 	if err != nil {
-		fmt.Println(err)
+		fmt.Errorf("unable to construct client: %#v", err)
+		return err
+	}
+	result, err := client.WriteTimeSeries(ctx, ts, wrOpts)
+	if err != nil {
+		fmt.Errorf("unable to construct client: %#v", err)
 		return err
 	}
 
-	statusCode := httpResponse.StatusCode
-	if statusCode/100 != 2 {
-		fmt.Errorf("expected HTTP 200 status code: actual=%d", statusCode)
-	}
-
-	rawResponseBody, err := ioutil.ReadAll(httpResponse.Body)
-	if err != nil {
-		fmt.Errorf("Error when getting the response body from http response %s", err)
-	}
-
-	defer httpResponse.Body.Close()
-
-	ResponseBody, err := snappy.Decode(nil, rawResponseBody)
-
-	var prompbResp prompb.ReadResponse
-	err = proto.Unmarshal(ResponseBody, &prompbResp)
-	if err != nil {
-		return fmt.Errorf("unable to unmarshal response body, %s", err)
-	}
+	fmt.Printf("write result: %#v\n", result)
 
 	return nil
-
 }
