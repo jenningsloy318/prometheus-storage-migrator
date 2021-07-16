@@ -7,3 +7,7 @@ To read local prometheus storage and write to remote storage
   
   --write.remote.url: the remote write url, which the metrics will be stored to
   ```
+
+
+### Reference
+- https://github.com/timescale/promscale/blob/master/pkg/migration-tool
